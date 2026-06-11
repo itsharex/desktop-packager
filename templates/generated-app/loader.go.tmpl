@@ -1,0 +1,335 @@
+package main
+
+import (
+	"archive/zip"
+	"bytes"
+	"encoding/binary"
+	"fmt"
+	"io"
+	"io/fs"
+	"os"
+	"path"
+	"strings"
+	"time"
+)
+
+const (
+	// resourceFooterMagic is the magic number at the end of the exe
+	// that indicates an appended resource zip. Bytes: "RESO"
+	resourceFooterMagic uint32 = 0x5245534F
+	footerSize                 = 8
+)
+
+// resourceFooter is the 8-byte footer appended after the zip data
+type resourceFooter struct {
+	Magic  uint32 // resourceFooterMagic
+	Offset uint32 // byte offset where zip data starts (relative to beginning of file)
+}
+
+// loadResources reads the appended zip from the running executable and returns
+// the embedded dist/ filesystem and config files.
+func loadResources() (fs.FS, map[string][]byte, error) {
+	exePath, err := os.Executable()
+	if err != nil {
+		return nil, nil, fmt.Errorf("获取可执行文件路径失败: %w", err)
+	}
+
+	f, err := os.Open(exePath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("打开可执行文件失败: %w", err)
+	}
+	defer f.Close()
+
+	// Get file size
+	stat, err := f.Stat()
+	if err != nil {
+		return nil, nil, fmt.Errorf("获取文件信息失败: %w", err)
+	}
+	fileSize := stat.Size()
+
+	if fileSize < int64(footerSize) {
+		return nil, nil, fmt.Errorf("可执行文件过小，未找到嵌入的资源")
+	}
+
+	// Read footer (last 8 bytes)
+	var footer resourceFooter
+	if _, err := f.Seek(-int64(footerSize), io.SeekEnd); err != nil {
+		return nil, nil, fmt.Errorf("定位 footer 失败: %w", err)
+	}
+	if err := binary.Read(f, binary.LittleEndian, &footer); err != nil {
+		return nil, nil, fmt.Errorf("读取 footer 失败: %w", err)
+	}
+
+	if footer.Magic != resourceFooterMagic {
+		return nil, nil, fmt.Errorf("未找到嵌入的资源（magic 不匹配）")
+	}
+
+	zipOffset := int64(footer.Offset)
+	zipSize := fileSize - zipOffset - int64(footerSize)
+
+	if zipSize <= 0 {
+		return nil, nil, fmt.Errorf("资源偏移量无效")
+	}
+
+	// Read zip from the exe
+	sectionReader := io.NewSectionReader(f, zipOffset, zipSize)
+	zr, err := zip.NewReader(sectionReader, zipSize)
+	if err != nil {
+		return nil, nil, fmt.Errorf("解析资源 zip 失败: %w", err)
+	}
+
+	// Build a filtered FS from dist/ entries
+	distFiles := make(map[string][]byte)
+	// Store config files
+	configFiles := make(map[string][]byte)
+
+	for _, file := range zr.File {
+		name := file.Name
+
+		// Skip entries with path traversal
+		if strings.Contains(name, "..") {
+			continue
+		}
+
+		// Read file content
+		rc, err := file.Open()
+		if err != nil {
+			continue
+		}
+		data, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			continue
+		}
+
+		// Store config files (proxy_config.json, app_config.json)
+		if name == "proxy_config.json" || name == "app_config.json" {
+			configFiles[name] = data
+			continue
+		}
+
+		// Collect dist/ files
+		if strings.HasPrefix(name, "dist/") {
+			// Skip directory entries (they end with /)
+			if strings.HasSuffix(name, "/") {
+				continue
+			}
+			// Store with "dist/" prefix stripped for fs.FS usage
+			relName := strings.TrimPrefix(name, "dist/")
+			if relName != "" {
+				distFiles[relName] = data
+			}
+		}
+	}
+
+	// Set defaults for missing configs
+	if configFiles["proxy_config.json"] == nil {
+		configFiles["proxy_config.json"] = []byte(`{"rules": []}`)
+	}
+	if configFiles["app_config.json"] == nil {
+		configFiles["app_config.json"] = []byte(`{"width": 1024, "height": 768}`)
+	}
+
+	distFS := newMapFS(distFiles)
+
+	return distFS, configFiles, nil
+}
+
+// mapFS implements fs.FS from a map of filename -> content
+type mapFS struct {
+	files map[string][]byte
+}
+
+func newMapFS(files map[string][]byte) *mapFS {
+	return &mapFS{files: files}
+}
+
+func (m *mapFS) Open(name string) (fs.File, error) {
+	// Normalize path
+	name = path.Clean(name)
+	if name == "." {
+		return m.openRoot(), nil
+	}
+
+	// Check if it's a direct file
+	if data, ok := m.files[name]; ok {
+		return &mapFile{name: path.Base(name), reader: bytes.NewReader(data), size: int64(len(data))}, nil
+	}
+
+	// Check if it's a directory (any file has this as a prefix)
+	dirPrefix := name + "/"
+	hasChildren := false
+	for filePath := range m.files {
+		if strings.HasPrefix(filePath, dirPrefix) {
+			hasChildren = true
+			break
+		}
+	}
+
+	if hasChildren {
+		return m.openDir(name), nil
+	}
+
+	return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrNotExist}
+}
+
+func (m *mapFS) openRoot() fs.File {
+	return &mapDir{name: ".", fs: m, path: "."}
+}
+
+func (m *mapFS) openDir(dirPath string) fs.File {
+	return &mapDir{name: path.Base(dirPath), fs: m, path: dirPath}
+}
+
+// mapFile implements fs.File
+type mapFile struct {
+	name   string
+	reader *bytes.Reader
+	size   int64
+}
+
+func (f *mapFile) Read(b []byte) (int, error)  { return f.reader.Read(b) }
+func (f *mapFile) Close() error                 { return nil }
+func (f *mapFile) Stat() (fs.FileInfo, error)   { return &mapFileInfo{f.name, f.size}, nil }
+
+// mapFileInfo implements fs.FileInfo
+type mapFileInfo struct {
+	name string
+	size int64
+}
+
+func (fi *mapFileInfo) Name() string       { return fi.name }
+func (fi *mapFileInfo) Size() int64        { return fi.size }
+func (fi *mapFileInfo) Mode() fs.FileMode  { return 0444 }
+func (fi *mapFileInfo) ModTime() time.Time { return time.Time{} }
+func (fi *mapFileInfo) IsDir() bool        { return false }
+func (fi *mapFileInfo) Sys() interface{}   { return nil }
+
+// mapDir implements fs.File and fs.ReadDirFile for directories
+type mapDir struct {
+	name   string
+	fs     *mapFS
+	path   string
+	offset int
+}
+
+func (d *mapDir) Read([]byte) (int, error) {
+	return 0, &fs.PathError{Op: "read", Path: d.path, Err: fs.ErrInvalid}
+}
+
+func (d *mapDir) Close() error               { return nil }
+func (d *mapDir) Stat() (fs.FileInfo, error)  { return &mapDirInfo{d.name}, nil }
+
+func (d *mapDir) ReadDir(n int) ([]fs.DirEntry, error) {
+	entries := d.readEntries()
+
+	if n <= 0 {
+		result := entries[d.offset:]
+		d.offset = len(entries)
+		return result, nil
+	}
+
+	if d.offset >= len(entries) {
+		return nil, io.EOF
+	}
+
+	end := d.offset + n
+	if end > len(entries) {
+		end = len(entries)
+	}
+	result := entries[d.offset:end]
+	d.offset = end
+	return result, nil
+}
+
+// readEntries builds the directory listing for this directory
+func (d *mapDir) readEntries() []fs.DirEntry {
+	seen := make(map[string]bool)
+	var entries []fs.DirEntry
+
+	dirPrefix := d.path
+	if dirPrefix == "." {
+		dirPrefix = ""
+	} else {
+		dirPrefix = dirPrefix + "/"
+	}
+
+	for filePath := range d.fs.files {
+		if !strings.HasPrefix(filePath, dirPrefix) {
+			continue
+		}
+
+		rel := filePath[len(dirPrefix):]
+		if rel == "" {
+			continue
+		}
+
+		// Get the first component
+		first := rel
+		if idx := strings.IndexByte(rel, '/'); idx >= 0 {
+			first = rel[:idx]
+		}
+
+		if seen[first] {
+			continue
+		}
+		seen[first] = true
+
+		// Check if it's a subdirectory or a file
+		isDir := false
+		fullPath := dirPrefix + first
+		subPrefix := fullPath + "/"
+		for fp := range d.fs.files {
+			if strings.HasPrefix(fp, subPrefix) {
+				isDir = true
+				break
+			}
+		}
+
+		if isDir {
+			entries = append(entries, &mapDirEntry{name: first})
+		} else {
+			// It's a file - get its size
+			size := int64(0)
+			if data, ok := d.fs.files[fullPath]; ok {
+				size = int64(len(data))
+			}
+			entries = append(entries, &mapFileEntry{name: first, size: size})
+		}
+	}
+
+	return entries
+}
+
+// mapDirInfo implements fs.FileInfo for directories
+type mapDirInfo struct {
+	name string
+}
+
+func (di *mapDirInfo) Name() string       { return di.name }
+func (di *mapDirInfo) Size() int64        { return 0 }
+func (di *mapDirInfo) Mode() fs.FileMode  { return fs.ModeDir | 0555 }
+func (di *mapDirInfo) ModTime() time.Time { return time.Time{} }
+func (di *mapDirInfo) IsDir() bool        { return true }
+func (di *mapDirInfo) Sys() interface{}   { return nil }
+
+// mapDirEntry implements fs.DirEntry for directories
+type mapDirEntry struct {
+	name string
+}
+
+func (de *mapDirEntry) Name() string               { return de.name }
+func (de *mapDirEntry) IsDir() bool                 { return true }
+func (de *mapDirEntry) Type() fs.FileMode           { return fs.ModeDir }
+func (de *mapDirEntry) Info() (fs.FileInfo, error)  { return &mapDirInfo{de.name}, nil }
+
+// mapFileEntry implements fs.DirEntry for files
+type mapFileEntry struct {
+	name string
+	size int64
+}
+
+func (fe *mapFileEntry) Name() string               { return fe.name }
+func (fe *mapFileEntry) IsDir() bool                 { return false }
+func (fe *mapFileEntry) Type() fs.FileMode           { return 0 }
+func (fe *mapFileEntry) Info() (fs.FileInfo, error)  { return &mapFileInfo{fe.name, fe.size}, nil }

@@ -1,0 +1,39 @@
+package main
+
+import (
+	"context"
+
+	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
+)
+
+// App struct
+type App struct {
+	ctx        context.Context
+	fullscreen bool
+	maximized  bool
+}
+
+// NewApp creates a new App application struct
+func NewApp() *App {
+	return &App{}
+}
+
+// startup is called when the app starts
+func (a *App) startup(ctx context.Context) {
+	a.ctx = ctx
+	if a.fullscreen {
+		wailsRuntime.WindowFullscreen(a.ctx)
+	} else if a.maximized {
+		wailsRuntime.WindowMaximise(a.ctx)
+	}
+}
+
+// confirmClose shows a native confirmation dialog before closing
+func (a *App) confirmClose(ctx context.Context) bool {
+	result, _ := wailsRuntime.MessageDialog(ctx, wailsRuntime.MessageDialogOptions{
+		Type:    wailsRuntime.QuestionDialog,
+		Title:   "确认关闭",
+		Message: "确定要关闭应用吗？",
+	})
+	return result != "Yes"
+}
