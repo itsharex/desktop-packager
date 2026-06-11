@@ -11,13 +11,21 @@ Deploy App 是一个基于 Wails 的 Windows 桌面应用打包工具。它可�
 
 ## 界面预览
 
-| 导入构建产物 | 应用配置 |
-| --- | --- |
-| ![导入构建产物](assets/img/step-1.png) | ![应用配置](assets/img/step-2.png) |
+### 导入构建产物
 
-| 反向代理配置 | 构建生成 |
-| --- | --- |
-| ![反向代理配置](assets/img/step-3.png) | ![构建生成](assets/img/step-4.png) |
+![导入构建产物](assets/img/step-1.png)
+
+### 应用配置
+
+![应用配置](assets/img/step-2.png)
+
+### 反向代理配置
+
+![反向代理配置](assets/img/step-3.png)
+
+### 构建生成
+
+![构建生成](assets/img/step-4.png)
 
 ## 功能特性
 
