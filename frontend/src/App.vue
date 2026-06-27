@@ -1,4 +1,12 @@
 <script lang="ts" setup>
+/**
+ * App 主组件
+ * 功能：
+ * 1. 提供应用整体布局（侧边栏 + 主内容区）
+ * 2. 实现步骤导航（4个步骤）
+ * 3. 提供全局配置对话框（临时目录设置）
+ * 4. 集成 Naive UI 的国际化（中文）
+ */
 import {ref} from 'vue'
 import {
   NAlert,
@@ -20,28 +28,45 @@ import StepProxy from './components/StepProxy.vue'
 import StepBuild from './components/StepBuild.vue'
 import {OpenTempFolder} from '../wailsjs/go/main/App'
 
+// 获取全局状态管理
 const store = useStore()
-const showGlobalSettings = ref(false)
-const globalSettingsError = ref('')
+const showGlobalSettings = ref(false)   // 是否显示全局配置对话框
+const globalSettingsError = ref('')     // 全局配置错误信息
 
+/**
+ * 步骤配置列表
+ * 定义每个步骤的标签和描述
+ */
 const steps = [
-  {label: '导入构建产物', desc: '选择 dist 文件夹或 ZIP'},
-  {label: '应用配置', desc: '设置名称和图标'},
-  {label: '反向代理', desc: '配置代理规则'},
-  {label: '构建生成', desc: '生成桌面应用'},
+  {label: '导入构建产物', desc: '选择 dist 文件夹或 ZIP'},  // 步骤 1
+  {label: '应用配置', desc: '设置名称和图标'},            // 步骤 2
+  {label: '反向代理', desc: '配置代理规则'},              // 步骤 3
+  {label: '构建生成', desc: '生成桌面应用'},              // 步骤 4
 ]
 
+/**
+ * 处理步骤点击事件
+ * @param index - 步骤索引（0-3）
+ */
 function handleStepClick(index: number) {
   store.setCurrentStep(index)
 }
 
+/**
+ * 选择临时文件目录
+ * 打开文件夹选择对话框，设置临时目录路径
+ */
 async function selectTempFolder() {
   globalSettingsError.value = ''
   try {
+    // 打开文件夹选择对话框
     const path = await OpenTempFolder()
-    if (!path) return
+    if (!path) return // 用户取消选择
+
+    // 保存到全局状态
     store.setTempPath(path)
   } catch (e: any) {
+    // 显示错误信息
     globalSettingsError.value = e?.message || String(e)
   }
 }

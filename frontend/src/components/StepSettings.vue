@@ -1,46 +1,81 @@
 <script lang="ts" setup>
+/**
+ * StepSettings 组件 - 应用设置步骤
+ * 功能：
+ * 1. 设置应用名称（带表单验证）
+ * 2. 选择应用图标（支持 .ico 和 .png）
+ * 3. 配置窗口大小和显示选项
+ * 4. 预览图标效果
+ */
 import {ref} from 'vue'
 import {NCard, NButton, NSpace, NInput, NFormItem, NForm, NImage, NAlert, NInputNumber, NSwitch, NDivider} from 'naive-ui'
 import {useStore} from '../store'
 import {OpenIconFile, ValidateIcon} from '../../wailsjs/go/main/App'
 
+// 获取全局状态管理
 const store = useStore()
-const formRef = ref()
-const error = ref('')
+const formRef = ref()   // 表单引用，用于调用验证方法
+const error = ref('')   // 错误信息
 
+/**
+ * 表单验证规则
+ * 应用名称：必填，长度 1-50 字符
+ */
 const rules = {
   appName: [
-    {required: true, message: '请输入应用名称', trigger: 'blur'},
-    {min: 1, max: 50, message: '名称长度 1-50 个字符', trigger: 'blur'},
+    {required: true, message: '请输入应用名称', trigger: 'blur'},      // 必填验证
+    {min: 1, max: 50, message: '名称长度 1-50 个字符', trigger: 'blur'}, // 长度验证
   ],
 }
 
+/**
+ * 选择图标文件
+ * 打开文件选择对话框，验证并预览图标
+ */
 async function selectIcon() {
   error.value = ''
   try {
+    // 打开文件选择对话框
     const path = await OpenIconFile()
-    if (!path) return
+    if (!path) return // 用户取消选择
+
+    // 验证图标并获取预览 URL（base64 格式）
     const preview = await ValidateIcon(path)
+
+    // 保存到全局状态
     store.setIcon(path, preview)
   } catch (e: any) {
+    // 显示错误信息
     error.value = e?.message || String(e)
   }
 }
 
+/**
+ * 清除已选择的图标
+ */
 function clearIcon() {
   store.clearIcon()
 }
 
+/**
+ * 返回上一步（导入步骤）
+ */
 function prevStep() {
   store.setCurrentStep(0)
 }
 
+/**
+ * 进入下一步（代理配置步骤）
+ * 先验证表单，验证通过后才能进入下一步
+ */
 async function nextStep() {
   try {
+    // 调用表单验证
     await formRef.value?.validate()
+    // 验证通过，进入下一步
     store.setCurrentStep(2)
   } catch {
-    // validation failed
+    // 验证失败，不进入下一步
   }
 }
 </script>

@@ -1,4 +1,12 @@
 <script lang="ts" setup>
+/**
+ * StepBuild 组件 - 构建生成步骤
+ * 功能：
+ * 1. 显示构建配置摘要
+ * 2. 执行应用构建流程
+ * 3. 显示构建进度
+ * 4. 显示构建结果（成功或失败）
+ */
 import {onMounted, onUnmounted} from 'vue'
 import {NCard, NButton, NSpace, NProgress, NAlert, NResult, NTimeline, NTimelineItem, NSpin} from 'naive-ui'
 import {useStore} from '../store'
@@ -6,64 +14,92 @@ import {BuildApp, OpenOutputFolder} from '../../wailsjs/go/main/App'
 import {EventsOn} from '../../wailsjs/runtime/runtime'
 import {main} from '../../wailsjs/go/models'
 
+// 获取全局状态管理
 const store = useStore()
 
+// 事件监听器引用，用于在组件卸载时取消监听
 let unlistenProgress: (() => void) | null = null
 let unlistenComplete: (() => void) | null = null
 
+/**
+ * 组件挂载时注册事件监听器
+ * 监听后端发送的构建进度和完成事件
+ */
 onMounted(() => {
+  // 监听构建进度事件
   unlistenProgress = EventsOn('build:progress', (data: any) => {
     store.setBuildProgress(data.step, data.progress)
   })
+  // 监听构建完成事件
   unlistenComplete = EventsOn('build:complete', (data: any) => {
     store.setBuildComplete(data.outputPath)
   })
 })
 
+/**
+ * 组件卸载时取消事件监听器，防止内存泄漏
+ */
 onUnmounted(() => {
   unlistenProgress?.()
   unlistenComplete?.()
 })
 
+/**
+ * 开始构建应用
+ * 验证配置后调用后端 BuildApp 方法
+ */
 async function startBuild() {
+  // 验证是否已导入构建产物
   if (!store.state.distPath) {
     store.setBuildError('请先导入前端构建产物')
     return
   }
+  // 验证是否已设置应用名称
   if (!store.state.appName) {
     store.setBuildError('请先设置应用名称')
     return
   }
 
+  // 设置构建状态为 true，重置相关状态
   store.setBuilding(true)
 
   try {
+    // 调用后端构建方法，传入构建配置
     await BuildApp(main.BuildConfig.createFrom({
-      appName: store.state.appName,
-      iconPath: store.state.iconPath,
-      distPath: store.state.distPath,
-      tempPath: store.state.tempPath,
-      proxyRules: [...store.state.proxyRules],
-      windowWidth: store.state.windowWidth,
-      windowHeight: store.state.windowHeight,
-      windowFullscreen: store.state.windowFullscreen,
-      windowMaximized: store.state.windowMaximized,
+      appName: store.state.appName,           // 应用名称
+      iconPath: store.state.iconPath,         // 图标路径
+      distPath: store.state.distPath,         // 前端构建产物路径
+      tempPath: store.state.tempPath,         // 临时目录路径
+      proxyRules: [...store.state.proxyRules], // 代理规则（展开数组以传递副本）
+      windowWidth: store.state.windowWidth,   // 窗口宽度
+      windowHeight: store.state.windowHeight, // 窗口高度
+      windowFullscreen: store.state.windowFullscreen, // 是否全屏
+      windowMaximized: store.state.windowMaximized,   // 是否最大化
     }))
   } catch (e: any) {
+    // 捕获构建错误并显示
     store.setBuildError(e?.message || String(e))
   }
 }
 
+/**
+ * 打开输出目录
+ * 使用系统文件管理器打开生成的应用所在目录
+ */
 async function openOutput() {
   if (store.state.outputPath) {
     try {
       await OpenOutputFolder(store.state.outputPath)
     } catch (e: any) {
-      // ignore
+      // 忽略打开目录的错误
     }
   }
 }
 
+/**
+ * 重置构建状态
+ * 用于重新构建时清除之前的状态
+ */
 function resetBuild() {
   store.setBuilding(false)
   store.setBuildProgress('', 0)
@@ -71,6 +107,9 @@ function resetBuild() {
   store.setOutputPath('')
 }
 
+/**
+ * 返回上一步（代理配置步骤）
+ */
 function prevStep() {
   store.setCurrentStep(2)
 }

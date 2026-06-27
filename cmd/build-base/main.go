@@ -1,10 +1,10 @@
-// build-base is a development tool that pre-compiles the base Wails application
-// shell into an exe. This exe is then embedded into the deploy-app so that
-// end users don't need a Go environment to build their apps.
+// build-base 开发工具
+// 用于预编译基础 Wails 应用程序为 exe 文件
+// 生成的 exe 会被嵌入到 deploy-app 中，这样最终用户不需要 Go 环境就能构建应用
 //
-// Usage: go run ./cmd/build-base
+// 使用方法：go run ./cmd/build-base
 //
-// The output is written to templates/base/base.exe
+// 输出文件：templates/base/base.exe
 package main
 
 import (
@@ -15,79 +15,90 @@ import (
 	"text/template"
 )
 
+// templateData 模板数据结构体
+// 用于渲染生成应用的源代码模板
 type templateData struct {
-	AppName    string
-	Width      int
-	Height     int
-	Fullscreen bool
-	Maximized  bool
+	AppName    string // 应用名称
+	Width      int    // 窗口宽度
+	Height     int    // 窗口高度
+	Fullscreen bool   // 是否全屏
+	Maximized  bool   // 是否最大化
 }
 
+// main 主函数
+// 执行以下步骤：
+// 1. 创建临时工作目录
+// 2. 渲染 Go 源代码模板
+// 3. 创建占位配置文件
+// 4. 运行 go mod tidy
+// 5. 编译生成 base.exe
 func main() {
-	// When run via "go run ./cmd/build-base" from project root,
-	// the working directory is already the project root.
+	// 获取当前工作目录（项目根目录）
 	projectRoot, err := os.Getwd()
 	if err != nil {
 		fatal("获取工作目录失败: %v", err)
 	}
 
-	templateDir := filepath.Join(projectRoot, "templates", "generated-app")
-	outputDir := filepath.Join(projectRoot, "templates", "base")
-	outputExe := filepath.Join(outputDir, "base.exe")
+	// 定义目录路径
+	templateDir := filepath.Join(projectRoot, "templates", "generated-app") // 模板目录
+	outputDir := filepath.Join(projectRoot, "templates", "base")            // 输出目录
+	outputExe := filepath.Join(outputDir, "base.exe")                        // 输出文件路径
 
-	// Create output directory
+	// 创建输出目录
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
 		fatal("创建输出目录失败: %v", err)
 	}
 
-	// Create temp working directory
+	// 创建临时工作目录
 	tempDir, err := os.MkdirTemp("", "build-base-*")
 	if err != nil {
 		fatal("创建工作目录失败: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer os.RemoveAll(tempDir) // 程序结束时清理临时目录
 
 	fmt.Println("工作目录:", tempDir)
 
-	// Template data with placeholder values
+	// 模板数据（使用占位值）
 	data := templateData{
-		AppName:    "BaseApp",
-		Width:      1024,
-		Height:     768,
-		Fullscreen: false,
-		Maximized:  false,
+		AppName:    "BaseApp", // 应用名称
+		Width:      1024,      // 默认宽度
+		Height:     768,       // 默认高度
+		Fullscreen: false,     // 默认不全屏
+		Maximized:  false,     // 默认不最大化
 	}
 
-	// Render templates
+	// 渲染 Go 源代码模板
 	templates := []string{"main.go", "app.go", "loader.go", "error_windows.go", "go.mod"}
 	for _, name := range templates {
 		tmplPath := filepath.Join(templateDir, name+".tmpl")
 		outputPath := filepath.Join(tempDir, name)
 
+		// 渲染模板并写入文件
 		if err := renderTemplate(tmplPath, outputPath, data); err != nil {
 			fatal("渲染模板 %s 失败: %v", name, err)
 		}
 		fmt.Printf("  ✓ 渲染 %s\n", name)
 	}
 
-	// Create an empty proxy_config.json (base app has no proxy rules)
+	// 创建空的 proxy_config.json（基础应用没有代理规则）
 	proxyConfig := `{"rules": []}`
 	if err := os.WriteFile(filepath.Join(tempDir, "proxy_config.json"), []byte(proxyConfig), 0644); err != nil {
 		fatal("写入 proxy_config.json 失败: %v", err)
 	}
 
-	// Create an empty dist directory (base app has no frontend)
+	// 创建空的 dist 目录（基础应用没有前端资源）
 	distDir := filepath.Join(tempDir, "dist")
 	if err := os.MkdirAll(distDir, 0755); err != nil {
 		fatal("创建 dist 目录失败: %v", err)
 	}
-	// Write a placeholder index.html so embed has something to work with
+
+	// 写入占位的 index.html，确保 embed 指令有内容可嵌入
 	placeholder := `<!DOCTYPE html><html><body><h1>Resource not found</h1></body></html>`
 	if err := os.WriteFile(filepath.Join(distDir, "index.html"), []byte(placeholder), 0644); err != nil {
 		fatal("写入 placeholder 失败: %v", err)
 	}
 
-	// Run go mod tidy
+	// 运行 go mod tidy，下载依赖
 	fmt.Println("运行 go mod tidy...")
 	cmd := exec.Command("go", "mod", "tidy")
 	cmd.Dir = tempDir
@@ -97,51 +108,73 @@ func main() {
 		fatal("go mod tidy 失败: %v", err)
 	}
 
-	// Run go build
+	// 编译生成 base.exe
 	fmt.Println("编译 base.exe...")
 	cmd = exec.Command("go", "build",
-		"-tags", "production",
-		"-ldflags", "-w -s -H windowsgui",
-		"-o", outputExe,
-		".",
+		"-tags", "production",                    // 生产环境标签
+		"-ldflags", "-w -s -H windowsgui",        // 去掉调试信息，隐藏控制台窗口
+		"-o", outputExe,                          // 输出文件路径
+		".",                                      // 当前目录
 	)
 	cmd.Dir = tempDir
-	cmd.Env = append(os.Environ(), "GOOS=windows", "GOARCH=amd64")
+	cmd.Env = append(os.Environ(), "GOOS=windows", "GOARCH=amd64") // 交叉编译为 Windows 64位
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		fatal("go build 失败: %v", err)
 	}
 
-	// Get file size
+	// 获取输出文件大小
 	stat, err := os.Stat(outputExe)
 	if err != nil {
 		fatal("获取输出文件信息失败: %v", err)
 	}
 
+	// 输出结果
 	fmt.Printf("\n✓ base.exe 已生成: %s (%.1f MB)\n", outputExe, float64(stat.Size())/(1024*1024))
 }
 
+// renderTemplate 渲染模板文件并写入输出文件
+// 功能：
+//   - 读取模板文件内容
+//   - 解析 Go 模板语法
+//   - 使用提供的数据渲染模板
+//   - 将渲染结果写入输出文件
+// 参数:
+//   - tmplPath: 模板文件路径
+//   - outputPath: 输出文件路径
+//   - data: 模板数据
+// 返回值:
+//   - error: 错误信息
 func renderTemplate(tmplPath, outputPath string, data interface{}) error {
+	// 读取模板文件内容
 	content, err := os.ReadFile(tmplPath)
 	if err != nil {
 		return err
 	}
 
+	// 解析模板
 	tmpl, err := template.New(filepath.Base(tmplPath)).Parse(string(content))
 	if err != nil {
 		return err
 	}
 
+	// 创建输出文件
 	f, err := os.Create(outputPath)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 
+	// 执行模板渲染并写入文件
 	return tmpl.Execute(f, data)
 }
 
+// fatal 输出错误信息并退出程序
+// 用于处理致命错误，输出到标准错误流并以状态码 1 退出
+// 参数:
+//   - format: 格式化字符串
+//   - args: 格式化参数
 func fatal(format string, args ...interface{}) {
 	fmt.Fprintf(os.Stderr, "错误: "+format+"\n", args...)
 	os.Exit(1)

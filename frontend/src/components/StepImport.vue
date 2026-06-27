@@ -1,49 +1,86 @@
 <script lang="ts" setup>
+/**
+ * StepImport 组件 - 导入构建产物步骤
+ * 功能：
+ * 1. 选择前端构建产物文件夹
+ * 2. 上传 ZIP 压缩包并自动解压
+ * 3. 显示导入的文件统计信息
+ * 4. 验证构建产物是否有效（包含 index.html）
+ */
 import {ref} from 'vue'
 import {NCard, NButton, NSpace, NResult, NSpin, NStatistic, NAlert} from 'naive-ui'
 import {useStore} from '../store'
 import {OpenDistFolder, UploadDistZip, GetDistInfo} from '../../wailsjs/go/main/App'
 
+// 获取全局状态管理
 const store = useStore()
-const loading = ref(false)
-const error = ref('')
+const loading = ref(false)  // 加载状态
+const error = ref('')       // 错误信息
 
+/**
+ * 选择文件夹方式导入构建产物
+ * 打开文件夹选择对话框，验证并导入
+ */
 async function selectFolder() {
   loading.value = true
   error.value = ''
   try {
+    // 打开文件夹选择对话框
     const path = await OpenDistFolder()
-    if (!path) return
+    if (!path) return // 用户取消选择
+
+    // 获取目录信息（文件数量、大小等）
     const info = await GetDistInfo(path)
+
+    // 保存到全局状态
     store.setDist(info.path, info.fileCount, info.totalSize)
   } catch (e: any) {
+    // 显示错误信息
     error.value = e?.message || String(e)
   } finally {
     loading.value = false
   }
 }
 
+/**
+ * 上传 ZIP 压缩包方式导入构建产物
+ * 选择 ZIP 文件，自动解压并导入
+ */
 async function uploadZip() {
   loading.value = true
   error.value = ''
   try {
+    // 打开文件选择对话框并解压
     const path = await UploadDistZip(store.state.tempPath)
-    if (!path) return
+    if (!path) return // 用户取消选择
+
+    // 获取解压后的目录信息
     const info = await GetDistInfo(path)
+
+    // 保存到全局状态
     store.setDist(info.path, info.fileCount, info.totalSize)
   } catch (e: any) {
+    // 显示错误信息
     error.value = e?.message || String(e)
   } finally {
     loading.value = false
   }
 }
 
+/**
+ * 格式化文件大小显示
+ * @param bytes - 字节数
+ * @returns 格式化后的字符串（B, KB, MB）
+ */
 function formatSize(bytes: number): string {
   if (bytes < 1024) return bytes + ' B'
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
   return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
 }
 
+/**
+ * 进入下一步（应用设置步骤）
+ */
 function nextStep() {
   store.setCurrentStep(1)
 }

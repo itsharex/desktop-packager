@@ -1,21 +1,44 @@
 <script lang="ts" setup>
+/**
+ * StepProxy 组件 - 反向代理配置步骤
+ * 功能：
+ * 1. 添加、删除、编辑代理规则
+ * 2. 配置路径前缀、目标地址、路径重写
+ * 3. 启用/禁用单条规则
+ * 4. 显示配置说明和示例
+ */
 import {NCard, NButton, NSpace, NInput, NSwitch, NAlert, NEmpty, NTooltip} from 'naive-ui'
 import {useStore} from '../store'
 
+// 获取全局状态管理
 const store = useStore()
 
+/**
+ * 添加新的代理规则
+ * 默认规则：/api/ -> http://localhost:8080/
+ */
 function addRule() {
   store.addProxyRule()
 }
 
+/**
+ * 删除指定索引的代理规则
+ * @param index - 要删除的规则索引
+ */
 function removeRule(index: number) {
   store.removeProxyRule(index)
 }
 
+/**
+ * 返回上一步（应用设置步骤）
+ */
 function prevStep() {
   store.setCurrentStep(1)
 }
 
+/**
+ * 进入下一步（构建生成步骤）
+ */
 function nextStep() {
   store.setCurrentStep(3)
 }
