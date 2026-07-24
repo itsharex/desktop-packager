@@ -14,6 +14,8 @@ export function OpenOutputFolder(arg1:string):Promise<void>;
 
 export function OpenTempFolder():Promise<string>;
 
+export function SanitizeName(arg1:string):Promise<string>;
+
 export function UploadDistZip(arg1:string):Promise<string>;
 
 export function ValidateIcon(arg1:string):Promise<string>;

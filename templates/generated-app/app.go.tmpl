@@ -8,14 +8,15 @@ import (
 
 // App struct
 type App struct {
-	ctx        context.Context
-	fullscreen bool
-	maximized  bool
+	ctx                 context.Context
+	fullscreen          bool
+	maximized           bool
+	confirmCloseEnabled bool
 }
 
 // NewApp creates a new App application struct
 func NewApp() *App {
-	return &App{}
+	return &App{confirmCloseEnabled: true}
 }
 
 // startup is called when the app starts
@@ -28,12 +29,20 @@ func (a *App) startup(ctx context.Context) {
 	}
 }
 
-// confirmClose shows a native confirmation dialog before closing
+// confirmClose shows a native confirmation dialog before closing.
+// Returns true to prevent close, false to allow close.
 func (a *App) confirmClose(ctx context.Context) bool {
-	result, _ := wailsRuntime.MessageDialog(ctx, wailsRuntime.MessageDialogOptions{
+	if !a.confirmCloseEnabled {
+		return false
+	}
+	result, err := wailsRuntime.MessageDialog(ctx, wailsRuntime.MessageDialogOptions{
 		Type:    wailsRuntime.QuestionDialog,
 		Title:   "确认关闭",
 		Message: "确定要关闭应用吗？",
 	})
-	return result != "Yes"
+	// Dialog failure should not trap the user in the window.
+	if err != nil {
+		return false
+	}
+	return result != "Yes" && result != "Ok" && result != "OK"
 }

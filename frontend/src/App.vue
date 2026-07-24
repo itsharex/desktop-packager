@@ -1,12 +1,4 @@
 <script lang="ts" setup>
-/**
- * App 主组件
- * 功能：
- * 1. 提供应用整体布局（侧边栏 + 主内容区）
- * 2. 实现步骤导航（4个步骤）
- * 3. 提供全局配置对话框（临时目录设置）
- * 4. 集成 Naive UI 的国际化（中文）
- */
 import {ref} from 'vue'
 import {
   NAlert,
@@ -22,51 +14,45 @@ import {
   dateZhCN,
 } from 'naive-ui'
 import {useStore} from './store'
+import {canEnterStep} from './validation'
 import StepImport from './components/StepImport.vue'
 import StepSettings from './components/StepSettings.vue'
 import StepProxy from './components/StepProxy.vue'
 import StepBuild from './components/StepBuild.vue'
 import {OpenTempFolder} from '../wailsjs/go/main/App'
 
-// 获取全局状态管理
 const store = useStore()
-const showGlobalSettings = ref(false)   // 是否显示全局配置对话框
-const globalSettingsError = ref('')     // 全局配置错误信息
+const showGlobalSettings = ref(false)
+const globalSettingsError = ref('')
 
-/**
- * 步骤配置列表
- * 定义每个步骤的标签和描述
- */
 const steps = [
-  {label: '导入构建产物', desc: '选择 dist 文件夹或 ZIP'},  // 步骤 1
-  {label: '应用配置', desc: '设置名称和图标'},            // 步骤 2
-  {label: '反向代理', desc: '配置代理规则'},              // 步骤 3
-  {label: '构建生成', desc: '生成桌面应用'},              // 步骤 4
+  {label: '导入构建产物', desc: '选择 dist 文件夹或 ZIP'},
+  {label: '应用配置', desc: '设置名称和图标'},
+  {label: '反向代理', desc: '配置 nginx 风格代理'},
+  {label: '构建生成', desc: '生成桌面应用'},
 ]
 
-/**
- * 处理步骤点击事件
- * @param index - 步骤索引（0-3）
- */
 function handleStepClick(index: number) {
-  store.setCurrentStep(index)
+  // Allow going back freely; forward only when prerequisites are met.
+  if (index <= store.state.currentStep) {
+    store.setCurrentStep(index)
+    return
+  }
+  if (canEnterStep(index, {
+    distPath: store.state.distPath,
+    appName: store.state.appName,
+  })) {
+    store.setCurrentStep(index)
+  }
 }
 
-/**
- * 选择临时文件目录
- * 打开文件夹选择对话框，设置临时目录路径
- */
 async function selectTempFolder() {
   globalSettingsError.value = ''
   try {
-    // 打开文件夹选择对话框
     const path = await OpenTempFolder()
-    if (!path) return // 用户取消选择
-
-    // 保存到全局状态
+    if (!path) return
     store.setTempPath(path)
   } catch (e: any) {
-    // 显示错误信息
     globalSettingsError.value = e?.message || String(e)
   }
 }
@@ -77,7 +63,6 @@ async function selectTempFolder() {
     <NMessageProvider>
       <NDialogProvider>
         <div class="app-layout">
-          <!-- Sidebar -->
           <div class="sidebar">
             <div class="sidebar-header">
               <h2>应用生成器</h2>
@@ -108,7 +93,8 @@ async function selectTempFolder() {
                 class="step-item"
                 :class="{
                   active: store.state.currentStep === index,
-                  completed: index < store.state.currentStep
+                  completed: index < store.state.currentStep,
+                  disabled: index > store.state.currentStep && !canEnterStep(index, { distPath: store.state.distPath, appName: store.state.appName })
                 }"
                 @click="handleStepClick(index)"
               >
@@ -124,7 +110,6 @@ async function selectTempFolder() {
             </div>
           </div>
 
-          <!-- Main Content -->
           <div class="main-content">
             <StepImport v-if="store.state.currentStep === 0" />
             <StepSettings v-else-if="store.state.currentStep === 1" />
@@ -151,7 +136,7 @@ async function selectTempFolder() {
               placeholder="留空则使用当前前端产物或 ZIP 所在目录"
             />
             <div class="settings-hint">
-              ZIP 解压、构建工作目录都会放在这里；如果留空，会使用当前导入文件所在目录。
+              ZIP 解压、构建工作目录都会放在这里；如果留空，会使用当前导入文件所在目录。退出应用时会清理会话内创建的临时目录。
             </div>
           </div>
           <template #footer>
@@ -235,6 +220,11 @@ async function selectTempFolder() {
 
 .step-item.active {
   background: #45475a;
+}
+
+.step-item.disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .step-item.completed .step-number {

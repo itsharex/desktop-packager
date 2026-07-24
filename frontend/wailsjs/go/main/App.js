@@ -26,6 +26,10 @@ export function OpenTempFolder() {
   return window['go']['main']['App']['OpenTempFolder']();
 }
 
+export function SanitizeName(arg1) {
+  return window['go']['main']['App']['SanitizeName'](arg1);
+}
+
 export function UploadDistZip(arg1) {
   return window['go']['main']['App']['UploadDistZip'](arg1);
 }

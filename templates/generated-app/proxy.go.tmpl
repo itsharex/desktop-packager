@@ -1,0 +1,234 @@
+package main
+
+import (
+	"net"
+	"net/http"
+	"net/http/httputil"
+	"net/url"
+	"strings"
+	"time"
+)
+
+func joinURLPath(a, b string) string {
+	if a == "" {
+		return b
+	}
+	if b == "" {
+		return a
+	}
+	aSlash := strings.HasSuffix(a, "/")
+	bSlash := strings.HasPrefix(b, "/")
+	switch {
+	case aSlash && bSlash:
+		return a + b[1:]
+	case !aSlash && !bSlash:
+		return a + "/" + b
+	default:
+		return a + b
+	}
+}
+
+func matchLocation(location, requestPath string) bool {
+	if location == "" || requestPath == "" {
+		return false
+	}
+	if !strings.HasPrefix(location, "/") {
+		location = "/" + location
+	}
+	if strings.HasSuffix(location, "/") {
+		trimmed := strings.TrimSuffix(location, "/")
+		return requestPath == trimmed || strings.HasPrefix(requestPath, location) || requestPath == location
+	}
+	return requestPath == location || strings.HasPrefix(requestPath, location+"/")
+}
+
+func locationRemainder(location, requestPath string) string {
+	if !matchLocation(location, requestPath) {
+		return ""
+	}
+	if !strings.HasPrefix(location, "/") {
+		location = "/" + location
+	}
+	if strings.HasSuffix(location, "/") {
+		trimmed := strings.TrimSuffix(location, "/")
+		if requestPath == trimmed || requestPath == location {
+			return ""
+		}
+		if strings.HasPrefix(requestPath, location) {
+			return requestPath[len(location):]
+		}
+		return ""
+	}
+	if requestPath == location {
+		return ""
+	}
+	if strings.HasPrefix(requestPath, location) {
+		return requestPath[len(location):]
+	}
+	return ""
+}
+
+func resolveUpstreamPath(location, requestPath, targetPath, rewrite string) string {
+	if location == "" {
+		return requestPath
+	}
+	if !strings.HasPrefix(location, "/") {
+		location = "/" + location
+	}
+
+	replacement := ""
+	useReplace := false
+	if strings.TrimSpace(rewrite) != "" {
+		useReplace = true
+		replacement = rewrite
+		if !strings.HasPrefix(replacement, "/") {
+			replacement = "/" + replacement
+		}
+	} else if targetPath != "" {
+		// Non-empty path (including "/") means proxy_pass was given a URI.
+		useReplace = true
+		replacement = targetPath
+	}
+
+	if !useReplace {
+		return requestPath
+	}
+
+	remainder := locationRemainder(location, requestPath)
+	if remainder == "" {
+		if replacement == "" {
+			return "/"
+		}
+		return replacement
+	}
+	return joinURLPath(replacement, remainder)
+}
+
+func normalizeLocation(location string) string {
+	location = strings.TrimSpace(location)
+	if location == "" {
+		return ""
+	}
+	if !strings.HasPrefix(location, "/") {
+		location = "/" + location
+	}
+	return location
+}
+
+func newProxyTransport() http.RoundTripper {
+	return &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		ResponseHeaderTimeout: 60 * time.Second,
+	}
+}
+
+func registerProxyRules(mux *http.ServeMux, rules []ProxyRule) {
+	for _, rule := range rules {
+		if !rule.Enabled {
+			continue
+		}
+		location := normalizeLocation(rule.Path)
+		if location == "" {
+			continue
+		}
+		target, err := url.Parse(strings.TrimSpace(rule.Target))
+		if err != nil || target.Scheme == "" || target.Host == "" {
+			continue
+		}
+
+		loc := location
+		rewrite := strings.TrimSpace(rule.Rewrite)
+		targetURL := *target
+		proxy := httputil.NewSingleHostReverseProxy(&targetURL)
+		proxy.Transport = newProxyTransport()
+		proxy.FlushInterval = 100 * time.Millisecond
+		proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+			http.Error(w, "Bad Gateway: "+err.Error(), http.StatusBadGateway)
+		}
+
+		proxy.Director = func(req *http.Request) {
+			// Capture original host before rewriting for upstream.
+			originalHost := req.Host
+			if originalHost == "" {
+				originalHost = req.Header.Get("Host")
+			}
+
+			outPath := resolveUpstreamPath(loc, req.URL.Path, targetURL.Path, rewrite)
+			req.URL.Scheme = targetURL.Scheme
+			req.URL.Host = targetURL.Host
+			req.URL.Path = outPath
+			req.URL.RawPath = ""
+			if targetURL.RawQuery != "" {
+				if req.URL.RawQuery == "" {
+					req.URL.RawQuery = targetURL.RawQuery
+				} else {
+					req.URL.RawQuery = targetURL.RawQuery + "&" + req.URL.RawQuery
+				}
+			}
+			// nginx proxy_set_header Host $proxy_host
+			req.Host = targetURL.Host
+
+			if clientIP, _, err := net.SplitHostPort(req.RemoteAddr); err == nil {
+				if prior := req.Header.Get("X-Forwarded-For"); prior == "" {
+					req.Header.Set("X-Forwarded-For", clientIP)
+				} else {
+					req.Header.Set("X-Forwarded-For", prior+", "+clientIP)
+				}
+				if req.Header.Get("X-Real-IP") == "" {
+					req.Header.Set("X-Real-IP", clientIP)
+				}
+			} else if req.RemoteAddr != "" {
+				if req.Header.Get("X-Forwarded-For") == "" {
+					req.Header.Set("X-Forwarded-For", req.RemoteAddr)
+				}
+				if req.Header.Get("X-Real-IP") == "" {
+					req.Header.Set("X-Real-IP", req.RemoteAddr)
+				}
+			}
+
+			if req.Header.Get("X-Forwarded-Proto") == "" {
+				if req.TLS != nil {
+					req.Header.Set("X-Forwarded-Proto", "https")
+				} else {
+					req.Header.Set("X-Forwarded-Proto", "http")
+				}
+			}
+			if req.Header.Get("X-Forwarded-Host") == "" && originalHost != "" {
+				req.Header.Set("X-Forwarded-Host", originalHost)
+			}
+		}
+
+		handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !matchLocation(loc, r.URL.Path) {
+				http.NotFound(w, r)
+				return
+			}
+			proxy.ServeHTTP(w, r)
+		})
+		registerLocation(mux, loc, handler)
+	}
+}
+
+func registerLocation(mux *http.ServeMux, location string, handler http.Handler) {
+	// Register both exact and prefix forms so /api and /api/ both reach the proxy,
+	// matching common nginx location convenience for desktop apps.
+	if strings.HasSuffix(location, "/") {
+		mux.Handle(location, handler)
+		exact := strings.TrimSuffix(location, "/")
+		if exact != "" {
+			mux.Handle(exact, handler)
+		}
+		return
+	}
+	mux.Handle(location, handler)
+	mux.Handle(location+"/", handler)
+}

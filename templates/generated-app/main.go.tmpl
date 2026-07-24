@@ -3,8 +3,6 @@ package main
 import (
 	"encoding/json"
 	"net/http"
-	"net/http/httputil"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,15 +24,24 @@ type ProxyConfig struct {
 }
 
 type AppConfig struct {
-	Width      int  `json:"width"`
-	Height     int  `json:"height"`
-	Fullscreen bool `json:"fullscreen"`
-	Maximized  bool `json:"maximized"`
+	Width        int    `json:"width"`
+	Height       int    `json:"height"`
+	Fullscreen   bool   `json:"fullscreen"`
+	Maximized    bool   `json:"maximized"`
+	ConfirmClose *bool  `json:"confirmClose"`
+	Version      string `json:"version"`
+	Description  string `json:"description"`
+	Company      string `json:"company"`
 }
 
 func parseProxyConfig(data []byte) ProxyConfig {
 	var cfg ProxyConfig
-	json.Unmarshal(data, &cfg)
+	if len(data) > 0 {
+		_ = json.Unmarshal(data, &cfg)
+	}
+	if cfg.Rules == nil {
+		cfg.Rules = []ProxyRule{}
+	}
 	return cfg
 }
 
@@ -43,88 +50,52 @@ func parseAppConfig(data []byte) AppConfig {
 		Width:  1024,
 		Height: 768,
 	}
-	json.Unmarshal(data, &cfg)
+	if len(data) > 0 {
+		_ = json.Unmarshal(data, &cfg)
+	}
+	if cfg.Width < 400 || cfg.Width > 3840 {
+		cfg.Width = 1024
+	}
+	if cfg.Height < 300 || cfg.Height > 2160 {
+		cfg.Height = 768
+	}
 	return cfg
 }
 
+func (c AppConfig) shouldConfirmClose() bool {
+	if c.ConfirmClose == nil {
+		return true
+	}
+	return *c.ConfirmClose
+}
+
 func main() {
-	// Load resources from appended zip
 	distFS, configBytes, err := loadResources()
 	if err != nil {
-		// Show error dialog and exit
 		showErrorAndExit("加载资源失败: " + err.Error())
 		return
 	}
 
-	// Parse configs
 	proxyCfg := parseProxyConfig(configBytes["proxy_config.json"])
 	appCfg := parseAppConfig(configBytes["app_config.json"])
 
-	// Get app title from exe filename
 	exePath, _ := os.Executable()
 	appName := strings.TrimSuffix(filepath.Base(exePath), filepath.Ext(exePath))
 
 	mux := http.NewServeMux()
-
-	// Register reverse proxy routes
-	for _, rule := range proxyCfg.Rules {
-		if !rule.Enabled {
-			continue
-		}
-		target, err := url.Parse(rule.Target)
-		if err != nil {
-			continue
-		}
-		proxy := httputil.NewSingleHostReverseProxy(target)
-		path := rule.Path
-		rewrite := rule.Rewrite
-
-		// ServeMux requires trailing / for subtree matching
-		muxPath := path
-		if !strings.HasSuffix(muxPath, "/") {
-			muxPath = muxPath + "/"
-		}
-
-		mux.HandleFunc(muxPath, func(w http.ResponseWriter, r *http.Request) {
-			if !strings.HasPrefix(r.URL.Path, muxPath) {
-				http.NotFound(w, r)
-				return
-			}
-
-			if rewrite == "" {
-				// Standard nginx behavior:
-				// - If target ends with "/" (e.g. http://backend/): strip prefix
-				//   /api/users -> /users
-				// - If target ends without "/" (e.g. http://backend): keep prefix
-				//   /api/users -> /api/users
-				if strings.HasSuffix(target.Path, "/") {
-					stripped := strings.TrimPrefix(r.URL.Path, muxPath)
-					if stripped == "" || stripped[0] != '/' {
-						stripped = "/" + stripped
-					}
-					r.URL.Path = stripped
-				}
-				// else: keep original path as-is
-				proxy.ServeHTTP(w, r)
-			} else {
-				// Custom rewrite: replace path prefix with rewrite value
-				// e.g. /api/users with path=/api/ rewrite=/v2 -> /v2/users
-				r.URL.Path = rewrite + r.URL.Path[len(muxPath):]
-				proxy.ServeHTTP(w, r)
-			}
-		})
-	}
+	registerProxyRules(mux, proxyCfg.Rules)
 
 	app := NewApp()
 	app.fullscreen = appCfg.Fullscreen
 	app.maximized = appCfg.Maximized
+	app.confirmCloseEnabled = appCfg.shouldConfirmClose()
 
-	wails.Run(&options.App{
+	err = wails.Run(&options.App{
 		Title:  appName,
 		Width:  appCfg.Width,
 		Height: appCfg.Height,
 		AssetServer: &assetserver.Options{
-			Assets:  distFS,
+			Assets:  newSPAFS(distFS),
 			Handler: mux,
 		},
 		BackgroundColour: &options.RGBA{R: 255, G: 255, B: 255, A: 255},
@@ -132,4 +103,7 @@ func main() {
 		OnBeforeClose:    app.confirmClose,
 		Bind:             []interface{}{app},
 	})
+	if err != nil {
+		showErrorAndExit("启动失败: " + err.Error())
+	}
 }

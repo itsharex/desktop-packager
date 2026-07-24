@@ -1,23 +1,20 @@
 # Build output
 build/bin/
-build/bin/*.exe
 
 # Frontend
 frontend/dist/
 frontend/node_modules/
 
-# Go
+# Go binaries (keep prebuilt base shell)
 *.exe
 *.exe~
+!templates/base/base.exe
 *.dll
 *.so
 *.dylib
 *.test
 *.out
 coverage.txt
-
-# Wails
-frontend/dist/
 
 # Dependencies
 node_modules/

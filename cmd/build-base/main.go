@@ -42,7 +42,7 @@ func main() {
 	// 定义目录路径
 	templateDir := filepath.Join(projectRoot, "templates", "generated-app") // 模板目录
 	outputDir := filepath.Join(projectRoot, "templates", "base")            // 输出目录
-	outputExe := filepath.Join(outputDir, "base.exe")                        // 输出文件路径
+	outputExe := filepath.Join(outputDir, "base.exe")                       // 输出文件路径
 
 	// 创建输出目录
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
@@ -68,7 +68,7 @@ func main() {
 	}
 
 	// 渲染 Go 源代码模板
-	templates := []string{"main.go", "app.go", "loader.go", "error_windows.go", "go.mod"}
+	templates := []string{"main.go", "app.go", "loader.go", "proxy.go", "error_windows.go", "go.mod"}
 	for _, name := range templates {
 		tmplPath := filepath.Join(templateDir, name+".tmpl")
 		outputPath := filepath.Join(tempDir, name)
@@ -108,13 +108,21 @@ func main() {
 		fatal("go mod tidy 失败: %v", err)
 	}
 
+	// go build 拒绝覆盖“已存在但不是合法 object 文件”的输出（例如占位 base.exe）
+	if _, err := os.Stat(outputExe); err == nil {
+		fmt.Println("移除旧的 base.exe...")
+		if err := os.Remove(outputExe); err != nil {
+			fatal("删除旧 base.exe 失败: %v", err)
+		}
+	}
+
 	// 编译生成 base.exe
 	fmt.Println("编译 base.exe...")
 	cmd = exec.Command("go", "build",
-		"-tags", "production",                    // 生产环境标签
-		"-ldflags", "-w -s -H windowsgui",        // 去掉调试信息，隐藏控制台窗口
-		"-o", outputExe,                          // 输出文件路径
-		".",                                      // 当前目录
+		"-tags", "production",             // 生产环境标签
+		"-ldflags", "-w -s -H windowsgui", // 去掉调试信息，隐藏控制台窗口
+		"-o", outputExe,                   // 输出文件路径
+		".",                               // 当前目录
 	)
 	cmd.Dir = tempDir
 	cmd.Env = append(os.Environ(), "GOOS=windows", "GOARCH=amd64") // 交叉编译为 Windows 64位
@@ -135,46 +143,26 @@ func main() {
 }
 
 // renderTemplate 渲染模板文件并写入输出文件
-// 功能：
-//   - 读取模板文件内容
-//   - 解析 Go 模板语法
-//   - 使用提供的数据渲染模板
-//   - 将渲染结果写入输出文件
-// 参数:
-//   - tmplPath: 模板文件路径
-//   - outputPath: 输出文件路径
-//   - data: 模板数据
-// 返回值:
-//   - error: 错误信息
 func renderTemplate(tmplPath, outputPath string, data interface{}) error {
-	// 读取模板文件内容
 	content, err := os.ReadFile(tmplPath)
 	if err != nil {
 		return err
 	}
 
-	// 解析模板
 	tmpl, err := template.New(filepath.Base(tmplPath)).Parse(string(content))
 	if err != nil {
 		return err
 	}
 
-	// 创建输出文件
 	f, err := os.Create(outputPath)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 
-	// 执行模板渲染并写入文件
 	return tmpl.Execute(f, data)
 }
 
-// fatal 输出错误信息并退出程序
-// 用于处理致命错误，输出到标准错误流并以状态码 1 退出
-// 参数:
-//   - format: 格式化字符串
-//   - args: 格式化参数
 func fatal(format string, args ...interface{}) {
 	fmt.Fprintf(os.Stderr, "错误: "+format+"\n", args...)
 	os.Exit(1)

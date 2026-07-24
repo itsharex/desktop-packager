@@ -28,6 +28,10 @@ export namespace main {
 	    windowHeight: number;
 	    windowFullscreen: boolean;
 	    windowMaximized: boolean;
+	    confirmClose: boolean;
+	    version: string;
+	    description: string;
+	    company: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new BuildConfig(source);
@@ -44,6 +48,10 @@ export namespace main {
 	        this.windowHeight = source["windowHeight"];
 	        this.windowFullscreen = source["windowFullscreen"];
 	        this.windowMaximized = source["windowMaximized"];
+	        this.confirmClose = source["confirmClose"];
+	        this.version = source["version"];
+	        this.description = source["description"];
+	        this.company = source["company"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
